@@ -23,13 +23,9 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: (incoming, callback) => {
-      if (!incoming || allowedOrigins.includes(incoming)) {
-        callback(null, true);
-      } else {
-        callback("Origin not allowed", false);
-      }
-    },
+origin: (incoming, callback) => {
+  callback(null, true);
+},
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -39,13 +35,7 @@ app.use("/api", express.json());
 app.use(
   "/api",
   cors({
-    origin: (incoming, callback) => {
-      if (!incoming || allowedOrigins.includes(incoming)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`Origin ${incoming} not allowed`));
-      }
-    },
+    origin: true,
     credentials: true,
   })
 );
