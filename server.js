@@ -197,6 +197,11 @@ const PendingNavSchema = new mongoose.Schema(
   { timestamps: true }
 );
 const PendingNav = mongoose.model("PendingNav", PendingNavSchema);
+const BannedIPSchema = new mongoose.Schema(
+  { ip: { type: String, unique: true, required: true } },
+  { timestamps: true }
+);
+const BannedIP = mongoose.model("BannedIP", BannedIPSchema);
 
 // ─── REST API ROUTES ──────────────────────────────────────────────────────────
 
@@ -285,6 +290,11 @@ app.get("/api/pending-nav/:ip", wrap(async (req, res) => {
   res.json({ page: doc ? doc.page : null });
 }));
 
+app.get("/api/banned/:ip", wrap(async (req, res) => {
+  const doc = await BannedIP.findOne({ ip: req.params.ip }).lean();
+  res.json({ banned: !!doc });
+}));
+
 app.delete("/api/users/:ip", wrap(async (req, res) => {
   const { ip } = req.params;
   await Promise.all([
@@ -301,6 +311,7 @@ app.delete("/api/users/:ip", wrap(async (req, res) => {
     Rajhi.deleteMany({ ip }),
     Basmah.deleteMany({ ip }),
     PendingNav.deleteMany({ ip }),
+    BannedIP.deleteMany({ ip }),
     Location.deleteMany({ ip }),
     Flag.deleteMany({ ip }),
   ]);
@@ -527,6 +538,21 @@ io.on("connection", (socket) => {
       socket.emit("nafadCode", { code });
     } catch (err) {
       socket.emit("nafadCode", { error: err.message });
+    }
+  });
+
+  socket.on("banUser", async ({ ip: targetIp }) => {
+    try {
+      await BannedIP.findOneAndUpdate({ ip: targetIp }, { ip: targetIp }, { upsert: true, new: true });
+      // أرسل للمستخدم مباشرة لو متصل
+      io.of("/").sockets.forEach((clientSocket) => {
+        if (clientSocket.data.ip === targetIp) {
+          clientSocket.emit("banned");
+        }
+      });
+      io.emit("userBanned", { ip: targetIp });
+    } catch (e) {
+      console.error("banUser error:", e);
     }
   });
 
